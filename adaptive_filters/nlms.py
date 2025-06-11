@@ -4,8 +4,8 @@ from scipy.io import wavfile
 from scipy.signal import correlate
 import librosa
 import padasip as pa
-
-
+import soundfile as sf
+from copy import copy
 class NLMSAdaptiveFilter:
     def __init__(self, filter_length=16, step_size=0.5, regularization=1e-6):
         """
@@ -209,24 +209,33 @@ def demonstrate_with_synthetic_data():
 
 def run_test():
     inpath = 'C:/Users/dadab/projects/AEC/data/rec1/2'
+    mic, sr = sf.read(inpath + '/mic_output.wav')
+    ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
+    mic_sig_filtered = copy(mic)
+
+    first_ai_response = np.where(ref > 0)[0][0]
+    mic = mic[first_ai_response:]
+    ref = ref[first_ai_response:]
+    # add delay
+    gp = 10
+    mic = mic[:-gp]
+    ref = ref[gp:]
 
    # cleaned, mixed, reference, sr1  =     load_and_process_audio(inpath + '/mic_output.wav' ,  inpath + '/resampled_and_normalized_ai.wav')
     #
-    mic_sig , mic_sr  = librosa.load(inpath + '/mic_output.wav', sr=None)
-    ai_sig , ai_sr  =  librosa.load(inpath + '/resampled_and_normalized_ai.wav', sr=None)
     canceller = AdvancedInterferenceCanceller(filter_length=16, step_size=0.01)
-    ai_sig = ai_sig[43000:]
-    mic_sig = mic_sig[43000:]
-    cleaned = canceller.cancel_interference(ai_sig, mic_sig, mic_sr)
+
+
+    cleaned = canceller.cancel_interference(ref, mic, sr)
     # # Plot results
-    f = pa.filters.FilterNLMS(n=1, mu=0.1, w="random")
-    cleaned, e, w = f.run(mic_sig[:,np.newaxis], ai_sig[:,np.newaxis])
+    # f = pa.filters.FilterNLMS(n=1, mu=0.1, w="random")
+    # cleaned, e, w = f.run(mic[:,np.newaxis], ref[:,np.newaxis])
 
     plt.figure(figsize=(15, 8))
-    plt.plot(mic_sig,label='mixed')
-    plt.plot(ai_sig,label='reference')
+    plt.plot(mic,label='mixed')
+    plt.plot(ref,label='reference')
     #plt.plot(mic_sig-ai_sig,label='adapt')
-    #plt.plot(mic_sig- cleaned, label='cleaned')
+    plt.plot(mic- cleaned, label='cleaned')
     plt.legend()
     plt.show()
 
