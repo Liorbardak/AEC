@@ -21,7 +21,7 @@ class NLMSAdaptiveFilter:
         self.weights = np.zeros(filter_length)
         self.reference_buffer = np.zeros(filter_length)
 
-    def process_sample(self, reference_sample, mixed_sample):
+    def filter_sample(self, reference_sample, mixed_sample , adapt = True):
         """Process a single sample using NLMS"""
         # Update reference buffer
         self.reference_buffer = np.roll(self.reference_buffer, 1)
@@ -40,20 +40,20 @@ class NLMSAdaptiveFilter:
         # Update weights
         self.weights += normalized_step * error * self.reference_buffer
 
-        return error
+        return interference_estimate , error
 
-    def process_signals(self, reference_signal, mixed_signal):
-        """Process entire signals"""
-        min_len = min(len(reference_signal), len(mixed_signal))
-        reference_signal = reference_signal[:min_len]
-        mixed_signal = mixed_signal[:min_len]
-
-        cleaned_signal = np.zeros(min_len)
-
-        for i in range(min_len):
-            cleaned_signal[i] = self.process_sample(reference_signal[i], mixed_signal[i])
-
-        return cleaned_signal
+    # def process_signals(self, reference_signal, mixed_signal):
+    #     """Process entire signals"""
+    #     min_len = min(len(reference_signal), len(mixed_signal))
+    #     reference_signal = reference_signal[:min_len]
+    #     mixed_signal = mixed_signal[:min_len]
+    #
+    #     cleaned_signal = np.zeros(min_len)
+    #
+    #     for i in range(min_len):
+    #         cleaned_signal[i] = self.process_sample(reference_signal[i], mixed_signal[i])
+    #
+    #     return cleaned_signal
 
 
 class VolterraFilter:
@@ -62,7 +62,8 @@ class VolterraFilter:
     Supports 1st and 2nd order kernels
     """
 
-    def __init__(self, memory_length_1=32, memory_length_2=32, mu1=0.001, mu2=0.001):
+    def __init__(self, filter_length=32,mu=0.001,  nonlinear_filter_length=32 , nonlinear_mu=0.001 ,
+                 use_nlms = True):
         """
         Initialize Volterra filter
 
@@ -77,11 +78,12 @@ class VolterraFilter:
         mu2 : float
             Step size for 2nd order adaptation
         """
-        self.M1 = memory_length_1
-        self.M2 = memory_length_2
-        self.mu1 = mu1
-        self.mu2 = mu2
-
+        self.M1 = filter_length
+        self.M2 = nonlinear_filter_length
+        self.mu1 = mu
+        self.mu2 = nonlinear_mu
+        self.regularization = 1e-2
+        self.use_nlms =  use_nlms
         # Initialize kernels (coefficients)
         self.h1 = np.zeros(self.M1)  # 1st order kernel (linear)
         self.h2 = np.zeros((self.M2, self.M2))  # 2nd order kernel (quadratic)
@@ -120,7 +122,19 @@ class VolterraFilter:
             Error signal for adaptation
         """
         # Update 1st order kernel
-        self.h1 += self.mu1 * error * self.x_buffer[:self.M1]
+        # Normalized step size
+        if self.use_nlms:
+            # NLMS
+            power = np.dot( self.x_buffer[:self.M1],  self.x_buffer[:self.M1]) / self.M1 + self.regularization
+            step = self.mu1 / power
+        else:
+            # LMS
+            step=  self.mu1
+
+
+        self.h1 += step * error * self.x_buffer[:self.M1]
+
+
 
         # Update 2nd order kernel
         for i in range(self.M2):
@@ -158,6 +172,40 @@ class VolterraFilter:
             self.adapt(e)
 
         return y, e
+    def process_signals(self, far_end, near_end, adapt=True):
+            """
+            Process audio signals for echo cancellation
+
+            Parameters:
+            -----------
+            far_end : array_like
+                Far-end signal (reference)
+            near_end : array_like
+                Near-end signal with echo
+            adapt : bool
+                Enable adaptation
+
+            Returns:
+            --------
+            echo_estimate : ndarray
+                Estimated echo signal
+            error_signal : ndarray
+                Echo-cancelled signal
+            """
+            N = len(far_end)
+            echo_estimate = np.zeros(N)
+            error_signal = np.zeros(N)
+
+            for n in range(N):
+                y, e = self.filter_sample(
+                    far_end[n], near_end[n], adapt=adapt
+                )
+
+                echo_estimate[n] = y
+                error_signal[n] = e
+
+            return echo_estimate, error_signal
+
 
 
 class EchoCanceller:
@@ -182,11 +230,19 @@ class EchoCanceller:
             Adaptation step size for nonlinear part
         """
         self.filter = VolterraFilter(
-            memory_length_1=linear_length,
-            memory_length_2=nonlinear_length,
-            mu1=mu_linear,
-            mu2=mu_nonlinear
+            filter_length=linear_length,
+            nonlinear_filter_length=nonlinear_length,
+            mu=mu_linear,
+            nonlinear_mu=mu_nonlinear,
+
         )
+
+
+        # self.filter = NLMSAdaptiveFilter(
+        #     filter_length=linear_length,
+        #
+        # )
+
 
         # Performance monitoring
         self.error_power = []
@@ -256,17 +312,29 @@ def test_filter(inpath):
     fs = sr
 
 
-    canceller = EchoCanceller(
-        linear_length=128,
-        nonlinear_length=32,
-        mu_linear=0.05,
-        mu_nonlinear=0.005
-    )
+    filter = VolterraFilter( filter_length=128, mu=0.002, nonlinear_filter_length=32,  nonlinear_mu=0.005,)
+    #
+    # canceller = EchoCanceller(
+    #     linear_length=128,
+    #     nonlinear_length=32,
+    #     mu_linear=0.05,
+    #     mu_nonlinear=0.005,
+    # )
+    # filter = EchoCanceller(
+    #     linear_length=128,
+    #     nonlinear_length=32,
+    #     mu_linear=0.002,
+    #     mu_nonlinear=0.005,
+    # )
 
-    print("Running Volterra echo cancellation...")
-
-    # Process signals
-    echo_estimate, error_signal = canceller.process_signals(
+    # print("Running Volterra echo cancellation...")
+    #
+    # # Process signals
+    # echo_estimate, error_signal = canceller.process_signals(
+    #     far_end, near_end, adapt=True
+    # )
+    #
+    echo_estimate, error_signal = filter.process_signals(
         far_end, near_end, adapt=True
     )
 
