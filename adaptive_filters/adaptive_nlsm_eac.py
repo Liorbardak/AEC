@@ -1,11 +1,8 @@
 import numpy as np
 from typing import Tuple
-import matplotlib.pyplot as plt
-from scipy import signal
+import cv2
 import os
-from scipy.io import wavfile
 import soundfile as sf
-from copy import copy
 import librosa
 
 class AdaptiveFilter:
@@ -106,88 +103,60 @@ class AdaptiveFilter:
         return echo_estimate, error_signal
 
 
-# # Example usage and testing
-# def test_filter(inpath):
-#
-#
-#
-#     mic, sr = sf.read(inpath + '/mic_output.wav')
-#     #ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
-#     ref, sr = sf.read(inpath + '/resampled_ai.wav')
-#     mic_sig_filtered = copy(mic)
-#
-#     first_ai_response = np.where(ref > 0)[0][0]
-#     mic = mic[first_ai_response:]
-#     ref = ref[first_ai_response:]
-#     # add delay
-#     gp = 32
-#     mic = mic[:-gp]
-#     ref = ref[gp:]
-#
-#     # scale_mic = mic.max()
-#     # scale_ref = ref.max()
-#
-#     scale_mic = 1 #mic.max()
-#     scale_ref = 1 #ref.max()
-#
-#
-#     ref = ref  / scale_ref
-#     mic = mic / scale_mic
-#
-#
-#     filter = AdaptiveFilter(filter_length=128, mu=0.002)
-#
-#     # run filter
-#     echo_estimate, error_signal = filter.process_signals(
-#         ref, mic
-#     )
-#
-#
-#
-#     mic_sig_filtered[first_ai_response:-gp] = error_signal * scale_mic
-#     sf.write(os.path.join(inpath + '/mic_filtered_adaptive_nlms2.wav'),
-#                   mic_sig_filtered,sr)
-#
-#
-#     # Calculate performance metrics
-#     initial_power = np.mean(mic ** 2)  # First second
-#     final_power = np.mean(error_signal ** 2)  # Last second
-#
-#     print(f"Initial echo power: {10 * np.log10(initial_power):.2f} dB")
-#     print(f"Final residual power: {10 * np.log10(final_power):.2f} dB")
-#     #print(f"Echo suppression: {10 * np.log10(initial_power / final_power):.2f} dB")
-#     print(f"Echo suppression: {(initial_power / final_power):.2f}")
-
-# # Example usage and testing
-def test_the_filter(inpath : str):
+def get_aligned_signals(inpath : str , delay : int = 0):
+    '''
+    Get resampled and aligned mic and ai signals
+    This part should be done in the online code
+    :param inpath:
+    :param delay: delay of the mic respect the ai signal
+    :return: ai & mic signals , sample rate
+    '''
     # Read mic signal
-    mic, sr = sf.read(inpath + '/mic_output.wav')
+    mic_sig, mic_sr = sf.read(inpath + '/mic_output.wav')
     # Read ai signal
-    ref, sr = sf.read(inpath + '/resampled_ai.wav')
+    ai_sig, ai_sr = sf.read(inpath + '/original_ai.wav')
+
+    mic_sig = mic_sig.astype(float)
+    # Resample AI signal to the sample rate of the mic signal
+    ai_sig = librosa.resample(ai_sig.astype(float), orig_sr=float(ai_sr), target_sr=float(mic_sr))
+
+    # Simple template matching for finding the shift between the signals
+    signal = mic_sig.reshape(1, -1).astype(np.float32)
+    template = ai_sig.reshape(1, -1).astype(np.float32)
+    result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
+    print(f" max corrolation between mic and ai response {np.max(result):.2f}")
+    # Create  so-called aligned AI signal
+    best_alignment = np.argmax(result)
+
+    ai_sig_aligned = np.zeros(mic_sig.shape)
+
+    ai_sig_aligned[best_alignment:best_alignment + ai_sig.shape[0]] = ai_sig.flatten()
+
+    # Add delay to the mic signal respect the ai response - needed for proper casual adaptive filtering
+    if delay > 0:
+        mic_sig = mic_sig[:-delay]
+        ai_sig_aligned = ai_sig_aligned[delay:]
 
 
+    return mic_sig, ai_sig_aligned , mic_sr
 
-    # Add delay
-    gp = 32
-    mic = mic[:-gp]
-    ref = ref[gp:]
-
-    # ref = ref  / scale_ref
-    # mic = mic / scale_mic
+# # Example usage and testing
+def test_the_filter(inpath : str , output_name : str =  None):
 
 
-    filter = AdaptiveFilter(filter_length=128, mu=0.002)
+    mic, ref , sr  = get_aligned_signals(inpath, 32)
+
+    adapt_filter = AdaptiveFilter(filter_length=128, mu=0.002)
 
     # run filter
-    echo_estimate, error_signal = filter.process_signals(
+    echo_estimate, mic_sig_filtered = adapt_filter.process_signals(
         ref, mic
     )
 
-
-
-    mic_sig_filtered = error_signal# * scale_mic
-    sf.write(os.path.join(inpath + '/mic_filtered_adaptive_nlms2.wav'),
-                  mic_sig_filtered,sr)
+    ###################   Debug     ###################
+    if output_name is not None:
+        sf.write(os.path.join(inpath , output_name),
+                      mic_sig_filtered,sr)
 
 
     # Calculate performance metrics - the attenuation of the ai response in the microphone
@@ -196,9 +165,9 @@ def test_the_filter(inpath : str):
     initial_power = np.mean(mic[first_ai_response:] ** 2)
     final_power = np.mean(mic_sig_filtered[first_ai_response:]  ** 2)
 
-    print(f"Echo suppression: {(initial_power / final_power):.2f} ,  {10 * np.log10(initial_power / final_power):.2f} dB ")
+    print(f"Echo suppression:  ,  {10 * np.log10(initial_power / final_power):.2f} dB  (energy reduction by factor of  {(initial_power / final_power):.2f}) ")
 
 if __name__ == "__main__":
     # Run the test
-    test_the_filter('C:/Users/dadab/projects/AEC/data/rec1/2')
+    test_the_filter('C:/Users/dadab/projects/AEC/data/rec1/2' , 'mic_filtered_adaptive_nlms3.wav' )
 
