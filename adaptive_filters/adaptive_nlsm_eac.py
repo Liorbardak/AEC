@@ -10,7 +10,7 @@ import librosa
 
 class AdaptiveFilter:
     """
-    nlms adaptive filter
+     adaptive nlms filter
     """
 
     def __init__(self, filter_length: int =32,mu : float =0.00):
@@ -95,8 +95,9 @@ class AdaptiveFilter:
         error_signal = np.zeros(N)
 
         for n in range(N):
+            adapt = reference[n] != 0  # Do not adapt filter if the ai response is not active
             y, e = self.filter_sample(
-                reference[n], mic[n], adapt=True
+                reference[n], mic[n], adapt= adapt
             )
 
             echo_estimate[n] = y
@@ -105,33 +106,74 @@ class AdaptiveFilter:
         return echo_estimate, error_signal
 
 
-# Example usage and testing
-def test_filter(inpath):
+# # Example usage and testing
+# def test_filter(inpath):
+#
+#
+#
+#     mic, sr = sf.read(inpath + '/mic_output.wav')
+#     #ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
+#     ref, sr = sf.read(inpath + '/resampled_ai.wav')
+#     mic_sig_filtered = copy(mic)
+#
+#     first_ai_response = np.where(ref > 0)[0][0]
+#     mic = mic[first_ai_response:]
+#     ref = ref[first_ai_response:]
+#     # add delay
+#     gp = 32
+#     mic = mic[:-gp]
+#     ref = ref[gp:]
+#
+#     # scale_mic = mic.max()
+#     # scale_ref = ref.max()
+#
+#     scale_mic = 1 #mic.max()
+#     scale_ref = 1 #ref.max()
+#
+#
+#     ref = ref  / scale_ref
+#     mic = mic / scale_mic
+#
+#
+#     filter = AdaptiveFilter(filter_length=128, mu=0.002)
+#
+#     # run filter
+#     echo_estimate, error_signal = filter.process_signals(
+#         ref, mic
+#     )
+#
+#
+#
+#     mic_sig_filtered[first_ai_response:-gp] = error_signal * scale_mic
+#     sf.write(os.path.join(inpath + '/mic_filtered_adaptive_nlms2.wav'),
+#                   mic_sig_filtered,sr)
+#
+#
+#     # Calculate performance metrics
+#     initial_power = np.mean(mic ** 2)  # First second
+#     final_power = np.mean(error_signal ** 2)  # Last second
+#
+#     print(f"Initial echo power: {10 * np.log10(initial_power):.2f} dB")
+#     print(f"Final residual power: {10 * np.log10(final_power):.2f} dB")
+#     #print(f"Echo suppression: {10 * np.log10(initial_power / final_power):.2f} dB")
+#     print(f"Echo suppression: {(initial_power / final_power):.2f}")
 
-
-
+# # Example usage and testing
+def test_the_filter(inpath : str):
+    # Read mic signal
     mic, sr = sf.read(inpath + '/mic_output.wav')
-    #ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
+    # Read ai signal
     ref, sr = sf.read(inpath + '/resampled_ai.wav')
-    mic_sig_filtered = copy(mic)
 
-    first_ai_response = np.where(ref > 0)[0][0]
-    mic = mic[first_ai_response:]
-    ref = ref[first_ai_response:]
-    # add delay
+
+
+    # Add delay
     gp = 32
     mic = mic[:-gp]
     ref = ref[gp:]
 
-    # scale_mic = mic.max()
-    # scale_ref = ref.max()
-
-    scale_mic = 1 #mic.max()
-    scale_ref = 1 #ref.max()
-
-
-    ref = ref  / scale_ref
-    mic = mic / scale_mic
+    # ref = ref  / scale_ref
+    # mic = mic / scale_mic
 
 
     filter = AdaptiveFilter(filter_length=128, mu=0.002)
@@ -143,29 +185,20 @@ def test_filter(inpath):
 
 
 
-    mic_sig_filtered[first_ai_response:-gp] = error_signal * scale_mic
+    mic_sig_filtered = error_signal# * scale_mic
     sf.write(os.path.join(inpath + '/mic_filtered_adaptive_nlms2.wav'),
                   mic_sig_filtered,sr)
 
 
-    # Calculate performance metrics
-    initial_power = np.mean(mic ** 2)  # First second
-    final_power = np.mean(error_signal ** 2)  # Last second
+    # Calculate performance metrics - the attenuation of the ai response in the microphone
+    first_ai_response = np.where(ref > 0)[0][0]
 
-    print(f"Initial echo power: {10 * np.log10(initial_power):.2f} dB")
-    print(f"Final residual power: {10 * np.log10(final_power):.2f} dB")
-    #print(f"Echo suppression: {10 * np.log10(initial_power / final_power):.2f} dB")
-    print(f"Echo suppression: {(initial_power / final_power):.2f}")
+    initial_power = np.mean(mic[first_ai_response:] ** 2)
+    final_power = np.mean(mic_sig_filtered[first_ai_response:]  ** 2)
 
-
-
+    print(f"Echo suppression: {(initial_power / final_power):.2f} ,  {10 * np.log10(initial_power / final_power):.2f} dB ")
 
 if __name__ == "__main__":
     # Run the test
-    results = test_filter('C:/Users/dadab/projects/AEC/data/rec1/2')
-
-    # Optional: Save results to audio files
-    # sf.write('far_end.wav', results['far_end'], 8000)
-    # sf.write('near_end_with_echo.wav', results['near_end'], 8000)
-    # sf.write('echo_cancelled.wav', results['error_signal'], 8000)
+    test_the_filter('C:/Users/dadab/projects/AEC/data/rec1/2')
 
