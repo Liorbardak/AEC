@@ -66,13 +66,12 @@ def analyze_performance(mic, reference, mic_filtered ,sr):
 
 
 if __name__ == '__main__':
-    i = 2
-    inpath = f'C:/Users/dadab/projects/AEC/data/rec1/{i}'
+    i = 12
+    inpath = f'C:/Users/dadab/projects/AEC/data/rec1_filtered/{i}'
     mic, sr = sf.read(inpath + '/mic_output.wav')
     ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
-    #mic_filtered, sr = sf.read(inpath + '/mic_filtered.wav')
-    #mic_filtered, sr = sf.read(inpath + '/mic_filtered_adaptive.wav')
-    mic_filtered, sr = sf.read(inpath + '/mic_filtered_adaptive_voltera.wav')
+    mic_filtered, sr = sf.read(inpath + '/mic_filtered.wav')
+
 
     # Get only the relevant part
     first_ai_response = np.where(ref > 0)[0][0]
@@ -81,6 +80,7 @@ if __name__ == '__main__':
     mic_filtered = mic_filtered[first_ai_response:]
 
     analyze_performance(mic, ref, mic_filtered, sr)
+    plt.savefig(os.path.join(inpath + '/att.png'))
     plt.show()
     #
     # for i in [2]: # np.arange(1,12):
