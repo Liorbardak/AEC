@@ -66,11 +66,16 @@ def analyze_performance(mic, reference, mic_filtered ,sr):
 
 
 if __name__ == '__main__':
-    i = 12
-    inpath = f'C:/Users/dadab/projects/AEC/data/rec1_filtered/{i}'
-    mic, sr = sf.read(inpath + '/mic_output.wav')
+    i = 2
+    inpath = f'C:/Users/dadab/projects/AEC/data/rec1/{i}'
+    mic, sr = sf.read(inpath + '/used_mic.wav')
     ref, sr = sf.read(inpath + '/resampled_and_normalized_ai.wav')
-    mic_filtered, sr = sf.read(inpath + '/mic_filtered.wav')
+    mic_filtered, sr = sf.read(inpath + '/mic_filtered_adaptive_nlms5.wav')
+
+    N = len(mic_filtered)
+    mic = mic[:N]
+    ref = ref[:N]
+    mic_filtered = mic_filtered[:N]
 
 
     # Get only the relevant part

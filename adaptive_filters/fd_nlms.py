@@ -422,9 +422,10 @@ if __name__ == "__main__":
     mic = mic_out[first_ai_response:]
     ref = ref[first_ai_response:]
     # add a small delay (make this filter casual)
-    gp = 10
-    mic = mic[:-gp]
-    ref = ref[gp:]
+    gp = 0
+    # gp = 10
+    # mic = mic[:-gp]
+    # ref = ref[gp:]
 
     # mic, sr = sf.read("samples/mic.wav")
     # ref, sr = sf.read("samples/lpb.wav")
@@ -450,7 +451,8 @@ if __name__ == "__main__":
     print(
         f"Echo suppression:  ,  {10 * np.log10(initial_power / final_power):.2f} dB  (energy reduction by factor of  {(initial_power / final_power):.2f}) ")
 
-    mic_sig_filtered[first_ai_response:-gp] = filtered_mic
+    #mic_sig_filtered[first_ai_response:-gp] = filtered_mic
+    mic_sig_filtered[first_ai_response:] = filtered_mic
     sf.write(os.path.join(inpath + '/mic_filtered_adaptive.wav'),
                   mic_sig_filtered,sr)
 
