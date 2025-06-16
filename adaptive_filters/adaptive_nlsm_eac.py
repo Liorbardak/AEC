@@ -4,7 +4,7 @@ import cv2
 import os
 import soundfile as sf
 import librosa
-
+from adapt_utils import get_aligned_signals
 
 class AdaptiveFilter:
     """
@@ -118,46 +118,10 @@ class AdaptiveFilter:
         return echo_estimate, error_signal
 
 
-def get_aligned_signals(inpath: str, delay: int = 0):
-    '''
-    Get resampled and aligned mic and ai signals
-    This part should be done in the online code
-    :param inpath:
-    :param delay: delay of the mic respect the ai signal
-    :return: ai & mic signals , sample rate
-    '''
-    # Read mic signal
-    mic_sig, mic_sr = sf.read(inpath + '/mic_output.wav')
-    # Read ai signal
-    ai_sig, ai_sr = sf.read(inpath + '/original_ai.wav')
-
-    mic_sig = mic_sig.astype(float)
-    # Resample AI signal to the sample rate of the mic signal
-    ai_sig = librosa.resample(ai_sig.astype(float), orig_sr=float(ai_sr), target_sr=float(mic_sr))
-
-    # Simple template matching for finding the shift between the signals
-    signal = mic_sig.reshape(1, -1).astype(np.float32)
-    template = ai_sig.reshape(1, -1).astype(np.float32)
-    result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
-    print(f" max corrolation between mic and ai response {np.max(result):.2f}")
-    # Create  so-called aligned AI signal
-    best_alignment = np.argmax(result)
-
-    ai_sig_aligned = np.zeros(mic_sig.shape)
-
-    ai_sig_aligned[best_alignment:best_alignment + ai_sig.shape[0]] = ai_sig.flatten()
-
-    # Add delay to the mic signal respect the ai response - needed for proper casual adaptive filtering
-    if delay > 0:
-        mic_sig = mic_sig[:-delay]
-        ai_sig_aligned = ai_sig_aligned[delay:]
-
-    return mic_sig, ai_sig_aligned, mic_sr
-
-
-# # Example usage and testing
 def test_the_filter(inpath: str, output_name: str = None):
+
     mic, ref, sr = get_aligned_signals(inpath, 32)
+
 
     adapt_filter = AdaptiveFilter(filter_length=128, mu=1e-1)
 
