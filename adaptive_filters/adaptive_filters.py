@@ -1,80 +1,118 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Tuple
-from collections import deque
 import cv2
 
 class AdaptiveFilter(ABC):
     """
      adaptive filter base
     """
-    def __init__(self, filter_length: int, full_ai_response : np.array , delay_estimation_size : int = 0, delay_estimation_uncertainty_samples : int = 0):
+    def __init__(self, filter_length: int, full_ai_response : np.array , min_size_for_delay_estimation : int = 0, delay_estimation_uncertainty_samples : int = 0):
         '''
 
-        :param filter_length:
-        :param full_ai_response: reference full ai response signal
-        :param delay_estimation_size: delay estimation buffer size[samples]
-        :param delay_estimation_uncertainty_samples: delay uncertainty[samples]
+        :param filter_length: adaptive filter length
+        :param full_ai_response: the reference  ai response signal
+        :param min_size_for_delay_estimation:minimal number of samples to match for delay estimation [samples]
+        :param delay_estimation_uncertainty_samples: delay uncertainty[samples] , if = 0 - dont estimate delay
         '''
+
         self.filter_length = filter_length
         self.set_full_ai_response(full_ai_response)
-        self.mic_hist_buffer =  deque([],maxlen=delay_estimation_size)
-        if  self.mic_hist_buffer.maxlen == 0:
+
+        self.delay_correlation_accumulator = None
+        self.min_size_for_delay_estimation = min_size_for_delay_estimation
+
+        self.delay_estimation_uncertainty_samples = delay_estimation_uncertainty_samples
+        self.additional_delay = 16 # add a bit more delay to the ai response , improve the attenuation of the casual filter
+
+        if self.delay_estimation_uncertainty_samples == 0:
+            # delay estimation is disabled
             self.delay = 0
         else:
+            # delay estimation is enabled - need to estimate the delay latter
             self.delay = None
-        self.delay_estimation_uncertainty_samples = delay_estimation_uncertainty_samples
-
+        self.delay_correlation_accumulator = None
+        self.sample_used_for_delay_estimation = 0
 
     def set_full_ai_response(self, full_ai_response : np.array ):
+        '''
+        Setter for ai response
+        :param full_ai_response:
+        :return:
+        '''
         self.full_ai_response = full_ai_response
 
     def reset(self):
-        self.mic_hist_buffer.clear()
-        if self.mic_hist_buffer.maxlen == 0:
+        if self.delay_estimation_uncertainty_samples == 0:
+            # delay estimation is disabled
             self.delay = 0
         else:
+            # delay estimation is enabled - need to estimate the delay latter
             self.delay = None
+        self.delay_correlation_accumulator = None
+        self.sample_used_for_delay_estimation = 0
 
     @abstractmethod
     def filter_sample(self, x_new: float, d_sample: float, do_adapt: bool = True) :
         pass
 
-    def estimate_delay(self, mic_batch):
-        self.mic_hist_buffer.extend(mic_batch)
+    def estimate_delay(self, mic_batch : np.array, index_in_reference : int):
+        '''
+        Estimate the delay between reference and mic 
+        perform correlation of each mic buffer respect the reference  , and accumulate the result in  self.delay_correlation_accumulator
+        :param mic_batch: batch of mic signal
+        :param index_in_reference: the matching index in reference buffer ( if delay was 0)  
+        :return: 
+        '''
 
-        if len(self.full_ai_response) < len(self.full_ai_response) <  self.delay_estimation_uncertainty_samples + self.mic_hist_buffer.__len__():
+        if len(self.full_ai_response) <  self.delay_estimation_uncertainty_samples:
             print('not enough samples for delay estimation in the recorded ai response')
             return
-
-        if (self.mic_hist_buffer.maxlen == self.mic_hist_buffer.__len__()) :
-            # for now - do not estimate after buffer is full - do not use the cyclic quality TODO - sort this out
+        
+        if (self.sample_used_for_delay_estimation >   self.min_size_for_delay_estimation * 4) & (self.delay is not None):
+            #print('stop estimation delay - enough is enough ')
             return
+        
+        if(len( self.full_ai_response) > index_in_reference+self.delay_estimation_uncertainty_samples ):
 
-        if(self.mic_hist_buffer.__len__() > self.delay_estimation_uncertainty_samples):
+            # Estimate delay by correlation of the current mic batch respect the reference  
+            signal = self.full_ai_response[index_in_reference:  index_in_reference+self.delay_estimation_uncertainty_samples].reshape(1, -1).astype(np.float32)
+            template = mic_batch.reshape(1, -1).astype(np.float32)
 
-            signal = self.full_ai_response[:  self.delay_estimation_uncertainty_samples + self.mic_hist_buffer.__len__()].reshape(1, -1).astype(np.float32)
-            template = np.array(list(self.mic_hist_buffer)).reshape(1, -1).astype(np.float32)
-            result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED).flatten()
+            # Correlation normalized by energy of the signals  - approximation for normalized correlation  
+            result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF).flatten() / (np.sqrt(np.mean((signal)**2)*np.mean((template)**2))*template.size)#
 
-            # Check that correlation is good enough
-            maxcorri = np.argmax(result)
-            maxcorr = result[maxcorri]
+            # Update delay correlation buffer with the  correlation of the current mic batch 
+            if self.delay_correlation_accumulator is None:
+                self.delay_correlation_accumulator = result
+            else:
+                alpha =  mic_batch.size / self.min_size_for_delay_estimation
+                # Update the correlation_accumulator with the new result (set alpha for exponential averaging over min_size_for_delay_estimation)
+                self.delay_correlation_accumulator = self.delay_correlation_accumulator * (1-alpha) + result * alpha
 
-            if((maxcorr > 0.2 )  & (maxcorr / np.percentile(np.abs(result), 75) > 5)):
-                self.delay = maxcorri
-                print(f" max correlation between mic and ai response {np.max(result):.2f} @ {maxcorri}")
+            # Update number of samples used for delay estimation                 
+            self.sample_used_for_delay_estimation += mic_batch.size
 
-            #
-            # # Check that the correlation is good
-            # import pylab as plt
-            # plt.figure()
-            # plt.plot(template.flatten()/np.max(template))
-            # plt.plot(signal.flatten() / np.max(signal))
-            # plt.figure()
-            # plt.plot(result.flatten())
-            # plt.show()
-            # pass
+            if self.sample_used_for_delay_estimation > self.min_size_for_delay_estimation:
+                # Enough samples were correlated =>  Check that correlation is good enough for setting the delay
+                maxcorri = np.argmax( self.delay_correlation_accumulator)
+                maxcorr =  self.delay_correlation_accumulator[maxcorri]
+                # TODO - make a better criteria 
+                if((maxcorr > 0.2 )  & (maxcorr / np.percentile(np.abs( self.delay_correlation_accumulator), 75) > 3)):
+                    self.delay = maxcorri
+                    print(f" max correlation between mic and ai response {np.max( self.delay_correlation_accumulator):.2f} @ {maxcorri} , used { self.sample_used_for_delay_estimation} samples ")
+
+                # 
+                # import pylab as plt
+                # plt.figure()
+                # plt.plot(template.flatten()/np.max(template))
+                # plt.plot(signal.flatten() / np.max(signal))
+                # plt.figure()
+                # plt.plot(result.flatten(),label = 'TM_CCOEFF_NORMED')
+                # plt.plot( self.delay_correlation_accumulator, label = 'delay_correlation_accumulator')
+                # plt.legend()
+                # plt.show()
+                # # pass
 
 
     def process_batch(self, mic_batch: np.array, index_in_reference : int):
@@ -85,11 +123,11 @@ class AdaptiveFilter(ABC):
         :return:
         '''
 
-        self.estimate_delay(mic_batch)
+        self.estimate_delay(mic_batch , index_in_reference)
 
         e_batch = mic_batch
         if self.delay is not None:
-            d_batch = self.full_ai_response[self.delay + index_in_reference:self.delay+ index_in_reference+len(mic_batch)]
+            d_batch = self.full_ai_response[self.delay+  self.additional_delay  + index_in_reference:self.delay+  self.additional_delay + index_in_reference+len(mic_batch)]
             if(d_batch.size == mic_batch.size):
                  e_batch =  self.filter_batch(d_batch, mic_batch)
 
@@ -112,12 +150,12 @@ class AdaptiveRLSFilter(AdaptiveFilter):
     """
     rls adaptive filter
     """
-    def __init__(self, filter_length: int, full_ai_response : np.array , delay_estimation_size : int = 0,delay_estimation_uncertainty_samples : int = 0,
+    def __init__(self, filter_length: int, full_ai_response : np.array ,  min_size_for_delay_estimation : int = 0,delay_estimation_uncertainty_samples : int = 0,
                  lmbd: float = 0.995, delta: float = 0.01):
         '''
         :param filter_length:
         '''
-        super().__init__(filter_length, full_ai_response, delay_estimation_size, delay_estimation_uncertainty_samples)
+        super().__init__(filter_length, full_ai_response, min_size_for_delay_estimation, delay_estimation_uncertainty_samples)
         self.lmbd = lmbd
         self.lmbd_inv = 1.0 / lmbd
         self.delta = delta
@@ -156,11 +194,16 @@ class AdaptiveRLSFilter(AdaptiveFilter):
         return e_n
 
 def run_sim(inpath):
-
+    '''
+    Simulation of delay
+    :param inpath:
+    :return:
+    '''
     from adapt_utils import get_aligned_signals, display_and_save
     from copy import copy
 
-    max_system_delay_sec = 0.5 #  delay uncertainty
+    min_size_for_delay_estimation_sec = 0.25 # minimal number of time to use for valid delay estimation[sec]
+    max_system_delay_sec = 0.5  # delay uncertainty
     #####################################################
     # Get the signals
     mic_out, ref, sr = get_aligned_signals(inpath, delay=0)
@@ -174,9 +217,8 @@ def run_sim(inpath):
     mic = mic[first_ai_response:]
     ref = ref[first_ai_response:]
 
-
-    # Add talk to the mic during the ai response time
     if False:
+        # Add talk to the mic during the ai response time
         talk_len = len(mic) // 4
         mic[talk_len:2 * talk_len] += mic_out[:len(mic[talk_len:2 * talk_len])]
 
@@ -189,35 +231,21 @@ def run_sim(inpath):
     if system_delay_samples > 0:
         ref = ref[:-system_delay_samples]
         mic = mic[system_delay_samples:]
-    # elif  system_delay_samples < 0:
-    #     ref = ref[:system_delay_samples]
-    #     mic = mic[-system_delay_samples:]
     else:
         pass
-
-    # make sure signals are exactly of batch size
-    N = len(mic) // batch_size * batch_size
-    mic = mic[:N]
-    ref = ref[:N]
 
     ####################################################
 
     # Define the filter
     adaptfilter = AdaptiveRLSFilter(64, ref,
-                                    delay_estimation_size = int(max_system_delay_sec*2 * sr) ,
+                                    min_size_for_delay_estimation = int(min_size_for_delay_estimation_sec * sr) ,
                                     delay_estimation_uncertainty_samples = int(max_system_delay_sec * sr) )
 
     # Run the filter , feed it batch by batch of mic samples
-
     mic_filtered = np.zeros(len(mic))
     for b in range(0, len(mic), batch_size):
         e_batch = adaptfilter.process_batch(mic[b:b + batch_size], b)
-        try:
-            mic_filtered[b:b + batch_size] = e_batch
-        except:
-            pass
-
-    #
+        mic_filtered[b:b + batch_size] = e_batch
 
     display_and_save(mic, mic_filtered, ref, sr, inpath)
 
