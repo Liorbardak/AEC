@@ -25,17 +25,43 @@ def get_aligned_signals(inpath: str, delay: int = 0):
     # Resample AI signal to the sample rate of the mic signal
     ai_sig = librosa.resample(ai_sig.astype(float), orig_sr=float(ai_sr), target_sr=float(mic_sr))
 
-    # Simple template matching for finding the shift between the signals
-    signal = mic_sig.reshape(1, -1).astype(np.float32)
-    template = ai_sig.reshape(1, -1).astype(np.float32)
-    result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
-    print(f" max correlation between mic and ai response {np.max(result):.2f}")
-    # Create  so-called aligned AI signal
-    best_alignment = np.argmax(result)
+    if len(mic_sig) > len(ai_sig):
+        # Simple template matching for finding the shift between the signals
+        signal = mic_sig.reshape(1, -1).astype(np.float32)
+        template = ai_sig.reshape(1, -1).astype(np.float32)
 
-    ai_sig_aligned = np.zeros(mic_sig.shape)
+        result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
+        best_alignment = np.argmax(result)
+        print(f" max correlation between mic and ai response {np.max(result):.2f} , {best_alignment}  ")
+        # Create  so-called aligned AI signal
 
-    ai_sig_aligned[best_alignment:best_alignment + ai_sig.shape[0]] = ai_sig.flatten()
+        ai_sig_aligned = np.zeros(mic_sig.shape)
+        ai_sig_aligned[best_alignment:best_alignment + ai_sig.shape[0]] = ai_sig.flatten()
+    else:
+        # Simple template matching for finding the shift between the signals
+        template = mic_sig.reshape(1, -1).astype(np.float32)
+        signal = ai_sig.reshape(1, -1).astype(np.float32)
+
+        result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
+        best_alignment = np.argmax(result)
+
+        print(f" max correlation between mic and ai response {np.max(result):.2f} , {best_alignment}  ")
+        # Create  so-called aligned AI signal
+
+        mic_sig_aligned = np.zeros(ai_sig.shape)
+        mic_sig_aligned[best_alignment:best_alignment + mic_sig.shape[0]] = mic_sig.flatten()
+
+        ai_sig_aligned = ai_sig
+        mic_sig = mic_sig_aligned
+
+    # plt.plot(result.flatten())
+    #
+    #
+    # plt.figure()
+    # plt.plot(mic_sig,alpha=0.7)
+    # plt.plot(ai_sig_aligned,alpha=0.7)
+    # plt.show()
+
 
     # Add delay to the mic signal respect the ai response - needed for proper casual adaptive filtering
     if delay > 0:
@@ -105,3 +131,6 @@ def display_and_save(mic : np.array , filtered_mic : np.array  , ref : np.array 
     axes[1, 1].set_title('Coherence between mic  and ai ')
 
     plt.show()
+
+if __name__ == '__main__':
+    mic_sig, ai_sig_aligned, mic_sr =    get_aligned_signals('C:/Users/dadab/projects/AEC/data/integration2')
