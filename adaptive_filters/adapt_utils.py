@@ -8,12 +8,13 @@ import librosa
 import pylab as plt
 from scipy import signal
 
-def get_aligned_signals(inpath: str, delay: int = 0):
+def get_aligned_signals(inpath: str, delay: int = 0 , display :bool = False):
     '''
     Get resampled and aligned mic and ai signals
     This part should be done in the online code
     :param inpath:
     :param delay: delay of the mic respect the ai signal
+    :param display: display
     :return: ai & mic signals , sample rate
     '''
     # Read mic signal
@@ -54,13 +55,18 @@ def get_aligned_signals(inpath: str, delay: int = 0):
         ai_sig_aligned = ai_sig
         mic_sig = mic_sig_aligned
 
-    # plt.plot(result.flatten())
-    #
-    #
-    # plt.figure()
-    # plt.plot(mic_sig,alpha=0.7)
-    # plt.plot(ai_sig_aligned,alpha=0.7)
-    # plt.show()
+
+
+    if (display):
+        plt.subplot(2,1,1)
+        plt.plot(mic_sig,alpha=0.7 ,label = 'mic')
+        plt.plot(ai_sig_aligned,alpha=0.7,label = 'aligned ai')
+        plt.legend()
+        plt.title(f" correlation {np.max(result):.2f} , delay [samples] {best_alignment} [sec] {best_alignment / mic_sr : .2f} ")
+        plt.subplot(2, 1, 2)
+        plt.plot(result.flatten())
+        plt.title("correlation")
+        plt.show()
 
 
     # Add delay to the mic signal respect the ai response - needed for proper casual adaptive filtering
@@ -81,6 +87,10 @@ def display_and_save(mic : np.array , filtered_mic : np.array  , ref : np.array 
     :param outpath:
     :return:
     '''
+
+    if outpath is not None:
+        sf.write(os.path.join(outpath + '/mic_filtered_adaptive.wav'),
+                 filtered_mic, sr)
 
     # Check when ai starts
     first_ai_response = np.where(ref > 0)[0][0]
@@ -133,4 +143,4 @@ def display_and_save(mic : np.array , filtered_mic : np.array  , ref : np.array 
     plt.show()
 
 if __name__ == '__main__':
-    mic_sig, ai_sig_aligned, mic_sr =    get_aligned_signals('C:/Users/dadab/projects/AEC/data/integration2')
+    mic_sig, ai_sig_aligned, mic_sr =    get_aligned_signals('C:/Users/dadab/projects/AEC/data/integration4')
