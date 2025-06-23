@@ -1,30 +1,60 @@
 import numpy as np
-from adaptive_filters import AdaptiveRLSFilter , AdaptiveNLMSFilter
 import soundfile as sf
-from adapt_utils import display_and_save, get_aligned_signals
 import cv2
 import pylab as plt
+import librosa
+import os
+from scipy import signal
 
+from adapt_utils import display_and_save, get_aligned_signals
+from adaptive_filters import AdaptiveRLSFilter , AdaptiveNLMSFilter
 
-def find_delay(inpath):
+def disp_integration(inpath , name1 ='echo', name2 ='original_output' , lastsamp = None):
     # Read mic signal
-    mic_sig, mic_sr = sf.read(inpath + '/mic_output.wav')
+    name1_sig, sr = sf.read(inpath + '/' + name1 + '.wav')
     # Read ai signal
-    ai_sig, ai_sr = sf.read(inpath + '/original_ai.wav')
+    name2_sig, sr2 = sf.read(inpath +  '/' + name2 + '.wav')
+    if sr != sr2:
+        name2_sig = librosa.resample(name2_sig.astype(float), orig_sr=float(sr2), target_sr=float(sr))
+    name1_sig = name1_sig.astype(float)
 
-    mic_sig = mic_sig.astype(float)
+    if lastsamp is not None:
+        name1_sig = name1_sig[:lastsamp]
+        name2_sig = name2_sig[:lastsamp]
+    plt.figure()
+    plt.plot(name1_sig,alpha = 0.7,label = name1)
+    plt.plot(name2_sig,alpha = 0.7,label = name2)
+    plt.legend()
+
+    plt.show()
+
+def find_delay(inpath , name1 ='mic_output', name2 ='original_ai' , lastsamp = None):
+    # Find delay between ai & mic
+    # Read mic signal
+    name1_sig, sr = sf.read(inpath + '/' + name1 + '.wav')
+    # Read ai signal
+    name2_sig, sr2 = sf.read(inpath +  '/' + name2 + '.wav')
+    if sr != sr2:
+        name2_sig = librosa.resample(name2_sig.astype(float), orig_sr=float(sr2), target_sr=float(sr))
+    name1_sig = name1_sig.astype(float)
+
+    if lastsamp is not None:
+        name1_sig = name1_sig[:lastsamp]
+        name2_sig = name2_sig[:lastsamp]
+
     # Simple template matching for finding the shift between the signals
-    range = np.min([len(mic_sig), mic_sr*3])
-    signal = mic_sig[:range].reshape(1, -1).astype(np.float32)
-    template = ai_sig[:range- mic_sr*2].reshape(1, -1).astype(np.float32)
+    range = np.min([len(name1_sig), sr*5])
+    signal = name1_sig[:range].reshape(1, -1).astype(np.float32)
+    template = name2_sig[:range- (int)(sr*1.5)].reshape(1, -1).astype(np.float32)
 
 
     result = cv2.matchTemplate(signal, template, cv2.TM_CCOEFF_NORMED)
     best_alignment = np.argmax(result)
 
+    name1_sig = name1_sig[best_alignment:]
     plt.subplot(2, 1, 1)
-    plt.plot(mic_sig,alpha = 0.7,label = 'mic')
-    plt.plot(ai_sig,alpha = 0.7,label = 'ai')
+    plt.plot(name1_sig,alpha = 0.7,label = name1)
+    plt.plot(name2_sig,alpha = 0.7,label = name2)
     plt.title(f"delay {best_alignment} corr  {np.max(result) : .2f}")
     plt.legend()
     plt.subplot(2, 1, 2)
@@ -33,14 +63,19 @@ def find_delay(inpath):
     plt.show()
 
 
-def debug_integration(inpath):
+def debug_integration(inpath ,name1 = 'mic_output.wav', name2 = 'original_ai.wav',  lastsamp = None):
 
 
     # Read mic signal
-    mic_sig, mic_sr = sf.read(inpath + '/mic_output.wav')
-    # Read ai signal
-    ai_sig, ai_sr = sf.read(inpath + '/original_ai.wav')
+    mic_sig, mic_sr = sf.read(inpath + '/' + name1)
+    # Read AI signal
+    ai_sig, ai_sr = sf.read(inpath + '/' + name2)
+    if lastsamp is not None:
+        ai_sig = ai_sig[:lastsamp]
+        mic_sig = mic_sig[:lastsamp]
 
+    # ai_sig = ai_sig[:-10000]
+    # mic_sig = mic_sig[10000:]
 
     min_size_for_delay_estimation_sec = 0.2  # minimal number of time to use for valid delay estimation[sec]
     max_system_delay_sec = 0.8 # delay uncertainty
@@ -73,20 +108,41 @@ def debug_integration(inpath):
 
     # Run the filter , feed it batch by batch of mic samples
     mic_filtered = np.zeros(len(mic_sig))
+    AI_energy_est = np.zeros(len(mic_sig))
+    mic_energy_est = []
     for mic_ind in range(0, len(mic_sig), batch_size):
 
-        mic_filtered[mic_ind:mic_ind + batch_size] = adaptfilter.process_batch(mic_sig[mic_ind:mic_ind + batch_size])
+        mic_filtered[mic_ind:mic_ind + batch_size], AI_energy = adaptfilter.process_batch(mic_sig[mic_ind:mic_ind + batch_size])
+        AI_energy_est[mic_ind:mic_ind + batch_size] = AI_energy
+        mic_energy_est.append(np.max([np.mean(mic_filtered[mic_ind:mic_ind + batch_size]**2)-AI_energy,0]))
 
-        # add more ai samples to the filter (arrive latter )
+        # add more AI samples to the filter (arrive latter )
         if ai_ind+batch_size < len(ai_sig):
             adaptfilter.add_ai_response_batch(ai_sig[ai_ind:ai_ind + batch_size])
             ai_ind += batch_size
+    est_mic = mic_sig - mic_filtered
 
-    display_and_save(mic_sig, mic_filtered, ai_sig, mic_sr, inpath)
+
+    mic_energy_est_sqrt = signal.lfilter(np.ones(3,)/3, 1, np.sqrt(mic_energy_est))
+    mic_energy_est = np.zeros(len(mic_sig))
+    i = 0
+    for mic_ind in range(0, len(mic_sig), batch_size):
+        mic_energy_est[mic_ind:mic_ind + batch_size]= mic_energy_est_sqrt[i]**2
+        i = i + 1
+    adaptfilter.save('d')
+
+    display_and_save(mic_sig, mic_filtered,est_mic,  ai_sig, mic_sr, AI_energy_est ,mic_energy_est ,  inpath ,   delay=  adaptfilter.delay)
 
 
 if __name__ == "__main__":
-    debug_integration('C:/Users/dadab/projects/AEC/data/a6/77')
-    #debug_integration('C:/Users/dadab/projects/AEC/data/integration3/4')
-    #find_delay('C:/Users/dadab/projects/AEC/data/a6/77')
+    #debug_integration('C:/Users/dadab/projects/AEC/data/a10' ,name1 = 'f_7_mic_output.wav' ,name2 = 'f_7_original_ai.wav')  # ,
+    #debug_integration('C:/Users/dadab/projects/AEC/data/a8')# ,lastsamp = 40000)
+    #debug_integration('C:/Users/dadab/projects/AEC/data/a7')# ,
+    #disp_integration('C:/Users/dadab/projects/AEC/data/a8')
+    find_delay('C:/Users/dadab/projects/AEC/data/a10', 'f_7_mic_output' , 'f_7_original_ai' ,lastsamp = 7*16000)
 
+    #debug_integration('C:/Users/dadab/projects/AEC/data/integration3/4')
+
+    #find_delay('C:/Users/dadab/projects/AEC/data/integration3/4')
+
+    plt.show()
